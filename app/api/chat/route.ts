@@ -46,8 +46,8 @@ export async function POST(req: Request) {
       return { role, parts };
     });
 
-    // Modèle corrigé en 1.5-flash
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // Utilisation de v1beta pour assurer la compatibilité avec le modèle
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -58,6 +58,7 @@ export async function POST(req: Request) {
     const data = await response.json();
 
     if (data.error) {
+      console.error("Erreur API Google :", data.error);
       return NextResponse.json({ error: data.error.message }, { status: 500 });
     }
 
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ reply });
 
   } catch (error) {
+    console.error("Erreur critique :", error);
     return NextResponse.json({ error: "Erreur de liaison serveur" }, { status: 500 });
   }
 }
