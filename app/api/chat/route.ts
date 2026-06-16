@@ -19,7 +19,6 @@ export async function POST(req: Request) {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("Clé API manquante dans les variables d'environnement");
       return NextResponse.json({ error: "Clé API manquante" }, { status: 500 });
     }
 
@@ -59,21 +58,13 @@ export async function POST(req: Request) {
     const data = await response.json();
 
     if (data.error) {
-      console.error("Erreur API Google :", data.error.message);
       return NextResponse.json({ error: data.error.message }, { status: 500 });
     }
 
-    // Vérification stricte de la structure de réponse
-    if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-      const reply = data.candidates[0].content.parts[0].text;
-      return NextResponse.json({ reply });
-    } else {
-      console.error("Structure de réponse inattendue :", JSON.stringify(data));
-      return NextResponse.json({ error: "Réponse de l'IA non lisible." }, { status: 500 });
-    }
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Je n'ai pas pu analyser le message.";
+    return NextResponse.json({ reply });
 
   } catch (error) {
-    console.error("Erreur critique serveur :", error);
     return NextResponse.json({ error: "Erreur de liaison serveur" }, { status: 500 });
   }
 }
