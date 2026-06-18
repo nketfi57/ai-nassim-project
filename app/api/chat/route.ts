@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
+import Groq from "groq-sdk";
+
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || "" });
 
 export async function POST(req: Request) {
   try {
     const { studentName, messages, difficulty, parentNote } = await req.json();
+
+    if (!process.env.GROQ_API_KEY) {
+      return NextResponse.json({ error: "Clé GROQ_API_KEY manquante" }, { status: 500 });
+    }
 
     const diffInstructions = {
       Facile: "L'élève a des difficultés. Sois ultra-pédagogue, décompose au maximum, utilise des mots simples et donne des indices évidents sans jamais donner la réponse finale.",
@@ -11,62 +18,69 @@ export async function POST(req: Request) {
     };
 
     const currentDiff = diffInstructions[difficulty as "Facile" | "Moyen" | "Difficile"] || diffInstructions.Moyen;
-    const parentConstraint = parentNote ? `CONSIGNE PARENTALE COMPLÉMENTAIRE : "${parentNote}". Respecte cette consigne discrètement.` : "";
+    const parentConstraint = parentNote ? `CONSIGNE PARENTALE : "${parentNote}".` : "";
 
-    const systemContext = studentName === "Tim"
-      ? `CONTEXTE SYSTÈME: Tu es un mentor scolaire à l'écoute pour Tim, 14 ans, en classe de 3ème. Accompagne-le durant sa scolarité. Niveau d'accompagnement actuel : ${currentDiff}. ${parentConstraint} RÈGLES SÉCURITÉ : 1. NE DONNE JAMAIS LA RÉPONSE FINALE. 2. Pose uniquement des questions par étapes pour le faire progresser.`
-      : `CONTEXTE SYSTÈME: Tu es une mentore scolaire bienveillante pour Julia, 11 ans, en classe de 6ème. Accompagne-la durant sa scolarité. Niveau d'accompagnement actuel : ${currentDiff}. ${parentConstraint} RÈGLES SÉCURITÉ : 1. NE DONNE JAMAIS LA RÉPONSE FINALE. 2. Utilise des exemples concrets de la vie courante.`;
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "Clé API manquante" }, { status: 500 });
-    }
+    const systemContext = `Tu es un mentor scolaire pour ${studentName}. Tu as la capacité de lire les textes et d'analyser les images d'exercices qu'on t'envoie. RÈGLES DE SÉCURITÉ ABSOLUES : 1. NE DONNE JAMAIS LA RÉPONSE FINALE. 2. Pose uniquement des questions par étapes pour faire progresser l'élève. Niveau actuel : ${currentDiff}. ${parentConstraint}`;
 
     const cleanMessages = messages[0]?.role === 'assistant' ? messages.slice(1) : messages;
+    
+    const lastMessage = cleanMessages[cleanMessages.length - 1];
+    const hasImage = lastMessage?.imageUrl && typeof lastMessage.imageUrl === 'string' && lastMessage.imageUrl.length > 50;
 
-    const contents = cleanMessages.map((m: { role: string, content: string, imageUrl?: string }, index: number) => {
-      const role = m.role === 'assistant' ? 'model' : 'user';
-      const parts = [];
+    // Utilisation obligatoire du modèle Vision si une image est détectée
+    const modelToUse = hasImage ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile";
 
-      if (m.content) {
-        if (index === 0) {
-          parts.push({ text: `${systemContext}\n\n[Début des échanges] Élève: ${m.content}` });
-        } else {
-          parts.push({ text: m.content });
+    const formattedMessages = cleanMessages.map((m: any, index: number) => {
+      const role = m.role === 'assistant' ? 'assistant' : 'user';
+      const isLast = index === cleanMessages.length - 1;
+
+      if (isLast && m.imageUrl && typeof m.imageUrl === 'string' && m.imageUrl.length > 50) {
+        let base64Data = m.imageUrl;
+        
+        // Nettoyage strict du préfixe Data URI pour Groq
+        if (base64Data.includes("base64,")) {
+          base64Data = base64Data.split("base64,")[1];
         }
+        
+        // Nettoyage des espaces, retours à la ligne et caractères parasites
+        base64Data = base64Data.replace(/[\r\n\s]+/g, "");
+
+        return {
+          role: "user",
+          content: [
+            { type: "text", text: m.content || "Voici la photo de mon exercice, analyse-la pour m'aider." },
+            { 
+              type: "image_url", 
+              image_url: { 
+                url: `data:image/jpeg;base64,${base64Data}` 
+              } 
+            }
+          ]
+        };
       }
 
-      if (m.imageUrl && m.imageUrl.includes("base64,")) {
-        const base64Data = m.imageUrl.split("base64,")[1];
-        parts.push({
-          inlineData: { mimeType: "image/jpeg", data: base64Data }
-        });
+      if (m.imageUrl && !isLast) {
+        return { role, content: (m.content || "") + " [Photo de l'exercice déjà reçue et analysée]" };
       }
 
-      return { role, parts };
+      return { role, content: m.content || "" };
     });
 
-    // Utilisation du suffixe -latest pour garantir la compatibilité
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+    formattedMessages.unshift({ role: "system", content: systemContext });
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents })
+    const chatCompletion = await groq.chat.completions.create({
+      messages: formattedMessages,
+      model: modelToUse,
+      temperature: 0.5, // Baissé pour plus de rigueur sur l'analyse d'image
+      max_tokens: 1024,
     });
 
-    const data = await response.json();
+    const reply = chatCompletion.choices[0]?.message?.content || "";
 
-    if (data.error) {
-      console.error("Erreur API Google :", data.error);
-      return NextResponse.json({ error: data.error.message }, { status: 500 });
-    }
-
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Je n'ai pas pu analyser le message.";
     return NextResponse.json({ reply });
 
-  } catch (error) {
-    console.error("Erreur critique :", error);
-    return NextResponse.json({ error: "Erreur de liaison serveur" }, { status: 500 });
+  } catch (error: any) {
+    console.error("Erreur Groq Vision :", error);
+    return NextResponse.json({ error: "Erreur Groq Vision : " + error.message }, { status: 500 });
   }
 }

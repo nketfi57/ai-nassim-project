@@ -73,7 +73,7 @@ export default function LoginCard({ onLoginSuccess }: LoginCardProps) {
         </div>
 
         <div className="mt-8 border-t border-white/10 pt-5 text-center gsap-reveal">
-          <span className="text-[9px] font-bold tracking-widest text-white/30 uppercase">🔒 SECURE CORE ACCESS</span>
+          <span className="text-[9px] font-bold tracking-widest text-white/30 uppercase"> Nassim Ketfi</span>
         </div>
       </div>
     </div>
